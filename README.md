@@ -1,5 +1,5 @@
- WEEK-1
-# Cortex AI Backend
+# WEEK-1
+ Cortex AI Backend
 Backend project developed for Zyroo Internship
 
 ## Technologies
@@ -20,8 +20,8 @@ GET /api/health
 
 
 
-WEEK-2
-# Cortex AI Backend
+# WEEK-2
+ Cortex AI Backend
 
 Backend API for the Cortex AI project built with Node.js, Express, MongoDB, and JWT authentication.
 
