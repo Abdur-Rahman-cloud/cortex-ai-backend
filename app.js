@@ -3,10 +3,14 @@ import express from 'express'
 import cors from 'cors'
 import healthRoutes from './routes/healthRoutes.js'
 import errorHandler from './middleware/errorHandler.js'
+import authRoutes from './routes/authRoutes.js';
 
 const app = express()
 
 app.use(cors())
+app.use(express.json());
+
+app.use('/api/auth', authRoutes);
 
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.url}`)
