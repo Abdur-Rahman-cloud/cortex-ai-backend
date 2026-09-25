@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const chunkSchema = new mongoose.Schema(
   {
@@ -44,4 +44,12 @@ const chunkSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Chunk", chunkSchema);
+// Prevent duplicate chunk indexes within the same document
+chunkSchema.index(
+  { document: 1, chunkIndex: 1 },
+  { unique: true }
+);
+
+const Chunk = mongoose.model("Chunk", chunkSchema);
+
+export default Chunk;

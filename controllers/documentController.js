@@ -1,9 +1,13 @@
 import Document from '../models/Document.js'
-import DocumentChunk from '../models/DocumentChunk.js'
+import Chunk from '../models/Chunk.js'
 import extractDocxText from '../utils/documentExtractor.js'
 import chunkText from '../utils/textChunker.js'
+import { storeChunkEmbedding } from '../services/vectorService.js'
+import fs from 'fs/promises'
 
 const uploadDocument = async (req, res) => {
+  let document = null
+
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -15,7 +19,7 @@ const uploadDocument = async (req, res) => {
     const userId = req.user.userId
 
     // 1. Create document record
-    const document = await Document.create({
+    document = await Document.create({
       owner: userId,
       filename: req.file.originalname,
       fileType: req.file.mimetype,
@@ -26,40 +30,79 @@ const uploadDocument = async (req, res) => {
     // 2. Extract text
     let extractedText = ''
 
-    if (
+    if (req.file.mimetype === 'text/plain') {
+      extractedText = await fs.readFile(req.file.path, 'utf-8')
+    } else if (req.file.mimetype === 'application/pdf') {
+      const pdfParse = (await import('pdf-parse')).default
+      const buffer = await fs.readFile(req.file.path)
+      const pdfData = await pdfParse(buffer)
+
+      extractedText = pdfData.text
+      document.pageCount = pdfData.numpages
+    } else if (
       req.file.mimetype ===
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ) {
       extractedText = await extractDocxText(req.file.path)
     }
 
-    // 3. Create chunks
-    const chunks = chunkText(extractedText, 500, 50)
-
-    // 4. Save chunks in MongoDB
-    const chunkDocuments = chunks.map((content, index) => ({
-      document: document._id,
-      owner: userId,
-      content,
-      chunkIndex: index,
-    }))
-
-    if (chunkDocuments.length > 0) {
-      await DocumentChunk.insertMany(chunkDocuments)
+    if (!extractedText.trim()) {
+      throw new Error('No text could be extracted from the document')
     }
 
-    // 5. Save extracted text and update status
+    // 3. Create overlapping chunks
+    const chunks = chunkText(extractedText, 500, 50)
+
+    if (chunks.length === 0) {
+      throw new Error('No chunks were created from the document')
+    }
+
+    // 4. Save chunks and generate embeddings
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = await Chunk.create({
+        document: document._id,
+        chunkIndex: index,
+        text: chunks[index],
+        tokenCount: chunks[index].split(/\s+/).length,
+        embeddingStatus: 'processing',
+      })
+
+      try {
+        const result = await storeChunkEmbedding(chunk)
+
+        chunk.vectorId = result.vectorId
+        chunk.embeddingStatus = 'ready'
+
+        await chunk.save()
+      } catch (embeddingError) {
+        console.error(
+          `Embedding failed for chunk ${index}:`,
+          embeddingError.message
+        )
+
+        chunk.embeddingStatus = 'failed'
+        chunk.embeddingAttempts += 1
+
+        await chunk.save()
+
+        throw embeddingError
+      }
+    }
+
+    // 5. Save extracted text
     document.content = extractedText
     document.status = 'ready'
 
     await document.save()
 
-    res.status(201).json({
+    // 6. Delete uploaded file after processing
+    await fs.unlink(req.file.path).catch(() => {})
+
+    return res.status(201).json({
       success: true,
-      message: 'File uploaded, extracted, and chunked successfully',
+      message: 'Document processed successfully',
       document: {
         id: document._id,
-        owner: document.owner,
         filename: document.filename,
         fileType: document.fileType,
         status: document.status,
@@ -71,11 +114,21 @@ const uploadDocument = async (req, res) => {
         size: 500,
         overlap: 50,
       },
+      embeddings: {
+        dimension: 384,
+        status: 'ready',
+        vectorDatabase: 'Qdrant',
+      },
     })
   } catch (error) {
     console.error('Upload error:', error)
 
-    res.status(500).json({
+    if (document) {
+      document.status = 'failed'
+      await document.save().catch(() => {})
+    }
+
+    return res.status(500).json({
       success: false,
       message: 'Document processing failed',
       error: error.message,
