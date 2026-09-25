@@ -4,7 +4,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 import uploadDocument from '../controllers/documentController.js'
-import authMiddleware from '../middleware/authMiddleware.js'
+// import authMiddleware from '../middleware/authMiddleware.js'
 
 
 const router = express.Router()
@@ -54,11 +54,18 @@ const upload = multer({
   fileFilter,
 })
 
+// router.post(
+//   '/',
+//   authMiddleware,
+//   upload.single('file'),
+//   uploadDocument
+// )
+
 router.post(
   '/',
-  authMiddleware,
   upload.single('file'),
   uploadDocument
 )
+
 
 export default router

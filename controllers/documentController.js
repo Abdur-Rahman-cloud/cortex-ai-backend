@@ -16,9 +16,9 @@ const uploadDocument = async (req, res) => {
       })
     }
 
-    const userId = req.user.userId
+    // Temporary user ID for testing
+    const userId = '000000000000000000000001'
 
-    // 1. Create document record
     document = await Document.create({
       owner: userId,
       filename: req.file.originalname,
@@ -27,19 +27,36 @@ const uploadDocument = async (req, res) => {
       pageCount: 0,
     })
 
-    // 2. Extract text
     let extractedText = ''
 
+    // TXT
     if (req.file.mimetype === 'text/plain') {
-      extractedText = await fs.readFile(req.file.path, 'utf-8')
-    } else if (req.file.mimetype === 'application/pdf') {
-      const pdfParse = (await import('pdf-parse')).default
+      extractedText = await fs.readFile(
+        req.file.path,
+        'utf-8'
+      )
+    }
+
+    // PDF
+    else if (req.file.mimetype === 'application/pdf') {
+      const { PDFParse } = await import('pdf-parse')
+
       const buffer = await fs.readFile(req.file.path)
-      const pdfData = await pdfParse(buffer)
+
+      const parser = new PDFParse({
+        data: buffer,
+      })
+
+      const pdfData = await parser.getText()
 
       extractedText = pdfData.text
-      document.pageCount = pdfData.numpages
-    } else if (
+      document.pageCount = pdfData.total
+
+      await parser.destroy()
+    }
+
+    // DOCX
+    else if (
       req.file.mimetype ===
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ) {
@@ -47,28 +64,42 @@ const uploadDocument = async (req, res) => {
     }
 
     if (!extractedText.trim()) {
-      throw new Error('No text could be extracted from the document')
+      throw new Error(
+        'No text could be extracted from the document'
+      )
     }
 
-    // 3. Create overlapping chunks
-    const chunks = chunkText(extractedText, 500, 50)
+    // Create chunks
+    const chunks = chunkText(
+      extractedText,
+      500,
+      50
+    )
 
     if (chunks.length === 0) {
-      throw new Error('No chunks were created from the document')
+      throw new Error(
+        'No chunks were created from the document'
+      )
     }
 
-    // 4. Save chunks and generate embeddings
-    for (let index = 0; index < chunks.length; index++) {
+    // Generate embeddings and store vectors
+    for (
+      let index = 0;
+      index < chunks.length;
+      index++
+    ) {
       const chunk = await Chunk.create({
         document: document._id,
         chunkIndex: index,
         text: chunks[index],
-        tokenCount: chunks[index].split(/\s+/).length,
+        tokenCount:
+          chunks[index].split(/\s+/).length,
         embeddingStatus: 'processing',
       })
 
       try {
-        const result = await storeChunkEmbedding(chunk)
+        const result =
+          await storeChunkEmbedding(chunk)
 
         chunk.vectorId = result.vectorId
         chunk.embeddingStatus = 'ready'
@@ -89,18 +120,19 @@ const uploadDocument = async (req, res) => {
       }
     }
 
-    // 5. Save extracted text
+    // Mark document ready
     document.content = extractedText
     document.status = 'ready'
 
     await document.save()
 
-    // 6. Delete uploaded file after processing
+    // Delete temporary uploaded file
     await fs.unlink(req.file.path).catch(() => {})
 
     return res.status(201).json({
       success: true,
       message: 'Document processed successfully',
+
       document: {
         id: document._id,
         filename: document.filename,
@@ -109,11 +141,13 @@ const uploadDocument = async (req, res) => {
         pageCount: document.pageCount,
         uploadedAt: document.uploadedAt,
       },
+
       chunks: {
         total: chunks.length,
         size: 500,
         overlap: 50,
       },
+
       embeddings: {
         dimension: 384,
         status: 'ready',
@@ -125,7 +159,12 @@ const uploadDocument = async (req, res) => {
 
     if (document) {
       document.status = 'failed'
+
       await document.save().catch(() => {})
+    }
+
+    if (req.file?.path) {
+      await fs.unlink(req.file.path).catch(() => {})
     }
 
     return res.status(500).json({
